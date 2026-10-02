@@ -9,6 +9,7 @@ notebooks; this file is only the learnings.
 |---|---|
 | `LG_SequentialWorkflow` | State, nodes, edges, compile, invoke (BMI calculator, LLM Q&A, prompt chaining) |
 | `LG_ParallelWorkflow` | Fan out / fan in, partial state updates, reducers (batsman stats, LLM essay evaluation) |
+| `LG_ConditionalWorkflow` | Conditional edges, router functions (quadratic solver, LLM review reply) |
 
 ---
 
@@ -82,5 +83,38 @@ Notebooks: `simple_parallel.ipynb`, `llm_parallel.ipynb`
 - `model.with_structured_output(PydanticModel)` makes the LLM return an object
   (`feedback`, `score`) instead of free text, so a node can read `result.score` directly.
 - Parallel LLM calls also save time: the three judges run together, not one after another.
+
+---
+
+## 3. Conditional Workflow
+
+Notebooks: `simple_conditional.ipynb`, `llm_conditional.ipynb`
+
+**The mental model**
+- The graph **picks one path** based on the state, like an `if/elif/else`. Quadratic solver:
+  the discriminant decides between `real_roots`, `repeated_roots` and `no_real_roots`,
+  and only that one branch runs.
+- Parallel = all branches run. Conditional = exactly one branch runs.
+
+**The router function**
+- `add_conditional_edges('calculate_discriminant', check_condition)` replaces a normal edge.
+  After that node, LangGraph calls `check_condition` to decide where to go next.
+- The router is **not a node**: it doesn't change the state. It only reads it and
+  returns the **name** of the next node as a string.
+- Type the return as `Literal['real_roots', 'repeated_roots', 'no_real_roots']`. That's
+  how LangGraph knows every possible destination, so the graph compiles and draws the
+  branches correctly.
+- Each branch still needs its own edge to `END` (or to wherever the paths join back).
+
+**Letting an LLM make the decision**
+- Customer review reply: an LLM classifies the review as positive or negative, and the
+  router sends it down the right branch. Positive gets a thank-you; negative goes to
+  `run_diagnosis` (issue type, tone, urgency) and then a tailored support reply.
+- The LLM node does the thinking and writes a label into state. The router stays plain
+  Python that reads that label. Keep routers dumb and fast.
+- Use **structured output with a `Literal`** (`Literal['positive', 'negative']`) for the
+  label. Free text like "The sentiment is mostly positive." would break the `if` check.
+- A branch can be several nodes long (`run_diagnosis -> negative_response`); it's just
+  normal edges after the split.
 
 ---
