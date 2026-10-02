@@ -8,6 +8,7 @@ notebooks; this file is only the learnings.
 | Folder | Topic |
 |---|---|
 | `LG_SequentialWorkflow` | State, nodes, edges, compile, invoke (BMI calculator, LLM Q&A, prompt chaining) |
+| `LG_ParallelWorkflow` | Fan out / fan in, partial state updates, reducers (batsman stats, LLM essay evaluation) |
 
 ---
 
@@ -43,5 +44,43 @@ Notebooks: `bmi_workflow.ipynb`, `llm_workflow.ipynb`, `prompt_chaining.ipynb`
   (title -> outline -> blog). The state is what carries the result between steps.
 - Small focused prompts beat one giant prompt, and each step's output can be checked
   on its own.
+
+---
+
+## 2. Parallel Workflow
+
+Notebooks: `simple_parallel.ipynb`, `llm_parallel.ipynb`
+
+**The mental model**
+- Nodes that don't depend on each other run **at the same time**, then their results
+  are combined. Batsman stats: strike rate, balls per boundary and boundary % are
+  independent, so they run in parallel and a `summary` node joins them.
+- **Fan out:** add several edges from the same node (here `START`) to the parallel nodes.
+- **Fan in:** add an edge from each parallel node into one node. LangGraph makes that
+  node **wait until all of them have finished** before running it.
+
+**Return only what you change (the big gotcha)**
+- In parallel, a node must return a **partial dict** of just the keys it updates,
+  e.g. `{'sr': 200.0}`, not the whole state.
+- Returning the full state means every parallel node writes every key in the same step,
+  and LangGraph refuses:
+  `InvalidUpdateError: At key 'a': Can receive only one value per step.`
+- LangGraph merges the partial dicts into the state for you. Returning partial dicts works
+  in sequential graphs too, so it's the safer habit everywhere.
+
+**When parallel nodes must write the same key: reducers**
+- Essay evaluation: three LLM judges (language, analysis, clarity) each produce a score,
+  and all three want to put it in `scores`. Normally that's the same error as above.
+- Fix: give the key a **reducer** with `Annotated`. The reducer says how to combine
+  values instead of overwriting:
+  `scores: Annotated[list[int], operator.add]`
+- Each node returns `{'scores': [7]}` (a one-item list), and `operator.add` joins the
+  lists, so the fan-in node sees `[5, 8, 8]`.
+- Keys without a reducer get **overwritten**; keys with one get **combined**.
+
+**LLM judges with structured output**
+- `model.with_structured_output(PydanticModel)` makes the LLM return an object
+  (`feedback`, `score`) instead of free text, so a node can read `result.score` directly.
+- Parallel LLM calls also save time: the three judges run together, not one after another.
 
 ---
