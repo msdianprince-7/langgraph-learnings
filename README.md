@@ -10,6 +10,7 @@ notebooks; this file is only the learnings.
 | `LG_SequentialWorkflow` | State, nodes, edges, compile, invoke (BMI calculator, LLM Q&A, prompt chaining) |
 | `LG_ParallelWorkflow` | Fan out / fan in, partial state updates, reducers (batsman stats, LLM essay evaluation) |
 | `LG_ConditionalWorkflow` | Conditional edges, router functions (quadratic solver, LLM review reply) |
+| `LG_IterativeWorkflow` | Loops, stop conditions, recursion limit (number guessing, LLM tweet improver) |
 
 ---
 
@@ -116,5 +117,52 @@ Notebooks: `simple_conditional.ipynb`, `llm_conditional.ipynb`
   label. Free text like "The sentiment is mostly positive." would break the `if` check.
 - A branch can be several nodes long (`run_diagnosis -> negative_response`); it's just
   normal edges after the split.
+
+---
+
+## 4. Iterative Workflow
+
+Notebooks: `simple_iterative.ipynb`, `llm_iterative.ipynb`
+
+**The mental model**
+- A **loop**: a conditional edge that can point **back** to an earlier node, so the graph
+  repeats steps until a condition is met. Number guessing: `make_guess -> check_guess`,
+  then back to `make_guess` until the hint is `correct`.
+- It's the same `add_conditional_edges` as before. The only difference is that one of the
+  router's destinations is a node that already ran.
+- The router returns `END` to stop. In the `Literal` type hint, `END` is written as
+  `'__end__'`.
+
+**State carries progress between rounds**
+- Each round reads what the previous round left behind (`low`, `high`, `attempts`) and
+  updates it. Without state, a loop would just repeat the same step forever.
+- Keep a counter like `attempts` in state; it's how you see or cap the number of rounds.
+
+**Always have a way out**
+- If the stop condition never comes true, LangGraph stops the run with
+  `GraphRecursionError: Recursion limit of ... reached`. It's a safety net, not a stop
+  condition.
+- Change it per run with `workflow.invoke(state, {'recursion_limit': 50})`. Better: put a
+  max-attempts check in the router yourself.
+
+**LLM loop: generate → evaluate → optimize**
+- Tweet writer: one LLM writes, a second LLM judges (`approved` / `needs_improvement`
+  + feedback), and if it's not good enough an optimizer rewrites using that feedback,
+  then the judge checks again. This **generator–evaluator–optimizer** loop is how you
+  get an LLM to improve its own output.
+- The router has **two exits**: approved, *or* `iteration >= max_iteration`. A strict LLM
+  judge may never approve, so the counter is what guarantees the loop ends.
+- Use a **different (bigger) model as the judge**. The same model tends to approve its
+  own work.
+- Keep a history with a reducer (`tweet_history: Annotated[list[str], operator.add]`).
+  Each round returns `[new_tweet]` and it's appended, so the final state shows every
+  version, not just the last.
+
+**gpt-oss gotcha: empty replies**
+- gpt-oss models "think" before answering. Sometimes all the output goes into that
+  hidden reasoning and `.content` comes back **empty**, which then poisons the next
+  round of the loop.
+- Fix: `ChatGroq(model='openai/gpt-oss-20b', reasoning_effort='low')` for simple
+  writing tasks.
 
 ---
