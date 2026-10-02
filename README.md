@@ -3,7 +3,7 @@
 Study repo. One folder per topic, each with Jupyter notebooks, all sharing a single venv at
 `venv/` and one `.env` at the root. Open a notebook in VS Code with the `venv` kernel, or
 double-click the folder's `run.bat` to start Jupyter with the venv. The code lives in the
-notebooks; this file is only the learnings.
+notebooks (and the `.py` files for the Streamlit app); this file is only the learnings.
 
 | Folder | Topic |
 |---|---|
@@ -11,6 +11,8 @@ notebooks; this file is only the learnings.
 | `LG_ParallelWorkflow` | Fan out / fan in, partial state updates, reducers (batsman stats, LLM essay evaluation) |
 | `LG_ConditionalWorkflow` | Conditional edges, router functions (quadratic solver, LLM review reply) |
 | `LG_IterativeWorkflow` | Loops, stop conditions, recursion limit (number guessing, LLM tweet improver) |
+| `LG_Persistence` | Message state, `add_messages`, chat loop, persistence (checkpointer, threads) |
+| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend |
 
 ---
 
@@ -164,5 +166,74 @@ Notebooks: `simple_iterative.ipynb`, `llm_iterative.ipynb`
   round of the loop.
 - Fix: `ChatGroq(model='openai/gpt-oss-20b', reasoning_effort='low')` for simple
   writing tasks.
+
+---
+
+## 5. Persistence
+
+Notebooks: `simple_chatbot.ipynb`, `persistence.ipynb`
+
+**The mental model**
+- A chatbot is the smallest graph possible, `START -> chat_node -> END`. The state is just
+  a **list of messages**: the node sends the whole list to the LLM and adds the reply.
+- The chat loop (`while True: input() ...`) lives **outside** the graph. Each message you
+  type is one `invoke`.
+
+**`add_messages`: the reducer for chat**
+- `messages: Annotated[list[BaseMessage], add_messages]`. Like `operator.add`, it
+  **appends** new messages instead of overwriting the list, so the node only returns
+  `{'messages': [response]}`.
+- It's smarter than `operator.add`: it also handles message IDs (a message with the same
+  ID replaces the old one instead of being duplicated).
+
+**Why the simple bot has no memory**
+- Every `invoke` starts from a **fresh state**. Tell it "my name is Priyansh", then ask
+  "what is my name?" in the next invoke, and it doesn't know.
+- The state only lives for one run of the graph. Remembering across turns needs the
+  state to be **saved between invokes**. That's persistence.
+
+**Persistence: a checkpointer gives the graph memory**
+- `graph.compile(checkpointer=InMemorySaver())`. The graph code doesn't change at all;
+  only the compile line does.
+- The checkpointer **saves the state after every step**. On the next invoke it loads the
+  saved state first, then `add_messages` appends the new message to the old ones.
+  So the bot remembers "my name is Priyansh".
+- **`thread_id` = one conversation.** Pass it on every call:
+  `config = {'configurable': {'thread_id': '1'}}`. Same thread = continues;
+  new thread = starts empty. That's how one bot serves many users or chats separately.
+- `chatbot.get_state(config)` reads the saved state of a thread (the full chat so far).
+- `chatbot.get_state_history(config)` lists **every checkpoint**, newest first, one per
+  step, so each turn leaves several snapshots behind. That history is what later makes
+  things like resuming after a crash and going back in time possible.
+- `InMemorySaver` keeps everything in RAM, so it's gone when the kernel restarts. For
+  real apps you swap in a database-backed checkpointer (e.g. SQLite); the rest stays the same.
+
+---
+
+## 6. Chatbot (Streamlit UI)
+
+Files: `chatbot_backend.py` (the graph), `streamlit_frontend.py` (the UI). Start with `run.bat`.
+
+**Backend / frontend split**
+- The backend is the persistence chatbot from section 5, moved into a `.py` file that
+  exposes one object: `chatbot` (the compiled graph with a checkpointer).
+- The frontend only does UI: show messages, take input, call `chatbot.invoke(...)`.
+  It knows nothing about nodes or edges, so either side can change without touching the other.
+
+**How Streamlit works (and why `session_state`)**
+- Streamlit **reruns the whole script from the top** every time you send a message.
+  Normal variables are wiped on each rerun.
+- `st.session_state` survives reruns, so the list of messages shown on screen lives there.
+  Without it the chat window would empty after every message.
+- Two separate memories: `session_state` is what the **UI displays**; the checkpointer
+  (by `thread_id`) is what the **LLM remembers**. They hold the same chat for different jobs.
+
+**Chat building blocks**
+- `st.chat_input('Type here')` is the input box at the bottom; it returns the text once sent.
+- `with st.chat_message('user' / 'assistant'):` draws a chat bubble with the right avatar.
+
+**Gotcha: the backend is imported once**
+- The import (and so the `InMemorySaver`) stays alive while the server runs, so memory
+  survives page reruns but is lost when you stop `streamlit run`.
 
 ---

@@ -5,3 +5,4 @@ langchain-groq
 python-dotenv
 ipykernel
 jupyter
+streamlit
