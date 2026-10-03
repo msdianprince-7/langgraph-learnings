@@ -12,7 +12,7 @@ notebooks (and the `.py` files for the Streamlit app); this file is only the lea
 | `LG_ConditionalWorkflow` | Conditional edges, router functions (quadratic solver, LLM review reply) |
 | `LG_IterativeWorkflow` | Loops, stop conditions, recursion limit (number guessing, LLM tweet improver) |
 | `LG_Persistence` | Message state, `add_messages`, chat loop, persistence (checkpointer, threads) |
-| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies |
+| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies, multiple threads, switching conversations |
 
 ---
 
@@ -244,6 +244,36 @@ Files: `chatbot_backend.py` (the graph), `streamlit_frontend.py` (the UI). Start
   `st.write_stream` just skips them.
 - `st.write_stream` renders Markdown, so show past messages with `st.markdown` too,
   otherwise replies look different after the page reruns.
+
+**Sidebar and multiple conversations (threads)**
+- Each chat gets its own **`thread_id`**, made with `uuid.uuid4()` so it's unique, and
+  kept in `session_state` so it survives reruns. The config passed to the graph is built
+  from it, so the checkpointer stores each chat separately.
+- **Start Chat** = new thread id + empty the on-screen `message_history`. The old chat is
+  still saved in the checkpointer under its own id. The bot only "forgets" because the
+  next message goes to a different thread.
+- All thread ids are kept in a list in `session_state` (`chat_threads`) and listed in the
+  sidebar under "My Conversations", newest first, as **clickable buttons**.
+
+**Loading an old conversation**
+- Clicking a thread's button switches `thread_id` to it and refills `message_history`
+  from the checkpointer: `chatbot.get_state(config).values['messages']`.
+- The checkpointer stores LangChain message objects; the UI wants `{'role', 'content'}`
+  dicts. Convert: `HumanMessage` → `'user'`, anything else → `'assistant'`.
+- A thread with no messages yet has **empty `values`**, so use `.get('messages', [])`.
+- After switching, the chat continues where it left off, because new messages go to that
+  thread's saved state. Threads stay isolated: facts told in one chat aren't known in another.
+- **Readable names instead of ids:** a `thread_names` dict in `session_state` maps
+  `thread_id -> name`. The name is the chat's first message, cut to 30 characters; a chat
+  with no messages shows "New Chat". The id stays the real identity; the name is only a label.
+- The sidebar is drawn **before** the new message is handled, so it still shows the old
+  label. Call `st.rerun()` once after naming so the new name appears straight away.
+- Give buttons made in a loop a **unique `key`** (`key=thread_id`). Two buttons with the
+  same label and no key make Streamlit raise a duplicate-element error.
+- `st.sidebar.title / .button / .header / .text` put elements in the sidebar instead
+  of the main page.
+- After the button changes the thread, call `st.rerun()` so the rest of the page is drawn
+  with the new thread straight away.
 
 **Gotcha: the backend is imported once**
 - The import (and so the `InMemorySaver`) stays alive while the server runs, so memory
