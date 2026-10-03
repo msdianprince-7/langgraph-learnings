@@ -12,7 +12,7 @@ notebooks (and the `.py` files for the Streamlit app); this file is only the lea
 | `LG_ConditionalWorkflow` | Conditional edges, router functions (quadratic solver, LLM review reply) |
 | `LG_IterativeWorkflow` | Loops, stop conditions, recursion limit (number guessing, LLM tweet improver) |
 | `LG_Persistence` | Message state, `add_messages`, chat loop, persistence (checkpointer, threads) |
-| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend |
+| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies |
 
 ---
 
@@ -231,6 +231,19 @@ Files: `chatbot_backend.py` (the graph), `streamlit_frontend.py` (the UI). Start
 **Chat building blocks**
 - `st.chat_input('Type here')` is the input box at the bottom; it returns the text once sent.
 - `with st.chat_message('user' / 'assistant'):` draws a chat bubble with the right avatar.
+
+**Streaming: show the reply as it's typed**
+- `chatbot.invoke` waits for the whole reply. `chatbot.stream(..., stream_mode='messages')`
+  instead yields the LLM's reply **token by token** as `(message_chunk, metadata)` pairs,
+  while the graph is still running.
+- `st.write_stream(generator)` draws each piece as it arrives and **returns the full text**
+  at the end, which is what gets saved into `session_state`.
+- Only the frontend changed. The graph and checkpointer are the same, and the streamed
+  reply is still saved to memory when the run finishes.
+- With gpt-oss, many chunks have **empty `.content`** (that's the hidden reasoning).
+  `st.write_stream` just skips them.
+- `st.write_stream` renders Markdown, so show past messages with `st.markdown` too,
+  otherwise replies look different after the page reruns.
 
 **Gotcha: the backend is imported once**
 - The import (and so the `InMemorySaver`) stays alive while the server runs, so memory
