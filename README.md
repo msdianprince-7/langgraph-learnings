@@ -264,8 +264,13 @@ Files: `chatbot_backend.py` (the graph), `streamlit_frontend.py` (the UI). Start
 - After switching, the chat continues where it left off, because new messages go to that
   thread's saved state. Threads stay isolated: facts told in one chat aren't known in another.
 - **Readable names instead of ids:** a `thread_names` dict in `session_state` maps
-  `thread_id -> name`. The name is the chat's first message, cut to 30 characters; a chat
-  with no messages shows "New Chat". The id stays the real identity; the name is only a label.
+  `thread_id -> name`; a chat with no messages shows "New Chat". The id stays the real
+  identity; the name is only a label.
+- **LLM-written titles:** after the first message, `generate_chat_title()` in the backend
+  asks the LLM for a max-5-word title ("Jaipur Budget 3-Day Plan"). It's a plain
+  `model.invoke`, **outside the graph**, so the title never enters the chat history or the
+  checkpointer. Done once per chat, so it costs one extra LLM call per conversation.
+  (Simpler alternative: cut the first message to 30 characters, no LLM call.)
 - The sidebar is drawn **before** the new message is handled, so it still shows the old
   label. Call `st.rerun()` once after naming so the new name appears straight away.
 - Give buttons made in a loop a **unique `key`** (`key=thread_id`). Two buttons with the

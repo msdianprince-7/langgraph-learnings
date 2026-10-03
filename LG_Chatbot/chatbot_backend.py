@@ -29,3 +29,10 @@ graph.add_edge('chat_node', END)
 
 checkpointer = InMemorySaver()
 chatbot = graph.compile(checkpointer=checkpointer)
+
+
+# A plain LLM call, outside the graph: it only labels the chat, it isn't part of the conversation
+def generate_chat_title(first_message):
+    prompt = ("Write a short title (max 5 words) for a chat that starts with this message. "
+              f"Reply with only the title, no quotes.\n{first_message}")
+    return model.invoke(prompt).content.strip()

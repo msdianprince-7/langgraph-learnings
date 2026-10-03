@@ -1,6 +1,6 @@
 import streamlit as st
 from langchain_core.messages import HumanMessage
-from chatbot_backend import chatbot
+from chatbot_backend import chatbot, generate_chat_title
 import uuid
 
 
@@ -86,9 +86,8 @@ if user_input:
 
     st.session_state['message_history'].append({'role': 'assistant', 'content': ai_message})
 
-    # Name the chat after its first message. The sidebar was already drawn above,
-    # so rerun once to show the new name.
+    # Ask the LLM for a title after the first message (only once per chat).
+    # The sidebar was already drawn above, so rerun once to show the new name.
     if st.session_state['thread_id'] not in st.session_state['thread_names']:
-        name = user_input if len(user_input) <= 30 else user_input[:30] + '...'
-        st.session_state['thread_names'][st.session_state['thread_id']] = name
+        st.session_state['thread_names'][st.session_state['thread_id']] = generate_chat_title(user_input)
         st.rerun()
