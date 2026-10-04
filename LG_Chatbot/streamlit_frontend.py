@@ -1,5 +1,5 @@
 import streamlit as st
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from chatbot_backend import chatbot, generate_chat_title, retrieve_all_threads
 import uuid
 
@@ -21,8 +21,11 @@ def load_conversation(thread_id):
     messages = state.values.get('messages', [])
 
     # Convert LangChain messages into the {'role', 'content'} format the UI uses
+    # Skip tool results and the empty AI messages that only asked for a tool
     history = []
     for message in messages:
+        if isinstance(message, ToolMessage) or not message.content:
+            continue
         role = 'user' if isinstance(message, HumanMessage) else 'assistant'
         history.append({'role': role, 'content': message.content})
     return history
@@ -83,16 +86,33 @@ if user_input:
     with st.chat_message('user'):
         st.markdown(user_input)
 
-    # stream_mode='messages' yields the LLM's reply token by token as (chunk, metadata)
+    # stream_mode='messages' yields every message as it's produced, as (chunk, metadata):
+    # the LLM's tokens (AIMessage chunks) AND tool results (ToolMessage).
     with st.chat_message('assistant'):
-        ai_message = st.write_stream(
-            message_chunk.content
+        status_holder = {'box': None}
+
+        def ai_only_stream():
             for message_chunk, metadata in chatbot.stream(
                 {'messages': [HumanMessage(content=user_input)]},
                 config=CONFIG,
                 stream_mode='messages',
-            )
-        )
+            ):
+                # A tool ran: show a status box instead of printing the raw tool output
+                if isinstance(message_chunk, ToolMessage):
+                    tool_name = message_chunk.name
+                    if status_holder['box'] is None:
+                        status_holder['box'] = st.status(f'🔧 Using `{tool_name}` …', expanded=True)
+                    else:
+                        status_holder['box'].update(label=f'🔧 Using `{tool_name}` …', state='running')
+
+                # Only the LLM's text goes into the reply
+                if isinstance(message_chunk, AIMessage):
+                    yield message_chunk.content
+
+        ai_message = st.write_stream(ai_only_stream())
+
+        if status_holder['box'] is not None:
+            status_holder['box'].update(label='✅ Tool finished', state='complete', expanded=False)
 
     st.session_state['message_history'].append({'role': 'assistant', 'content': ai_message})
 

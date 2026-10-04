@@ -12,7 +12,8 @@ notebooks (and the `.py` files for the Streamlit app); this file is only the lea
 | `LG_ConditionalWorkflow` | Conditional edges, router functions (quadratic solver, LLM review reply) |
 | `LG_IterativeWorkflow` | Loops, stop conditions, recursion limit (number guessing, LLM tweet improver) |
 | `LG_Persistence` | Message state, `add_messages`, chat loop, persistence (checkpointer, threads) |
-| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies, multiple threads, switching conversations, SQLite persistence, LangSmith tracing |
+| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies, multiple threads, switching conversations, SQLite persistence, LangSmith tracing, tools (search, calculator, stocks) |
+| `LG_Tools` | Tool calling: `@tool`, `bind_tools`, `ToolNode`, `tools_condition` |
 
 ---
 
@@ -315,4 +316,55 @@ Files: `chatbot_backend.py` (the graph), `streamlit_frontend.py` (the UI). Start
 - The title call (`generate_chat_title`) gets a run name but **no thread_id**, on purpose:
   it isn't a chat turn, so it shouldn't show up inside the conversation's thread.
 
+**Tools in the chatbot** (the section 7 pattern, inside the real app)
+- Three tools: `DuckDuckGoSearchRun()` (a ready-made LangChain tool, no API key),
+  a `calculator(first_num, second_num, operation)` and `get_stock_price(symbol)` using
+  `yfinance` (real prices, no API key). The graph becomes
+  `chat_node -> tools -> chat_node` with `ToolNode` + `tools_condition`.
+- **Streaming gets noisier:** `stream_mode='messages'` now also yields `ToolMessage`s
+  (raw tool output) and AI chunks that only request a tool. Yield **only `AIMessage`
+  content** to `st.write_stream`, or the raw search results get printed as the reply.
+- Use the `ToolMessage`s as a signal instead: show an `st.status('Using tool…')` box and
+  mark it complete at the end, so the user knows why the reply is taking longer.
+- **Loading old chats** must skip `ToolMessage`s and AI messages with empty content
+  (tool requests), or they show up as blank or raw bubbles.
+- One docstring line per tool decides when the LLM picks it ("ticker symbol, e.g. AAPL,
+  or INFY.NS for NSE India"). It's the tool's instruction manual.
+
 ---
+
+---
+
+## 7. Tools
+
+Notebooks: `tool_calling.ipynb`
+
+**The mental model**
+- A **tool** is a normal Python function the LLM can ask to use: maths, a search, an API.
+  The LLM **never runs it**. It replies with a *tool call* (name + arguments), your code
+  runs the function, and the result goes back to the LLM to write the final answer.
+- In LangGraph that's a loop: `chat_node -> tools -> chat_node -> ... -> END`, repeating
+  until the LLM answers without asking for a tool.
+
+**Making and binding tools**
+- `@tool` on a function makes it a tool. The LLM only sees the **name, docstring and
+  argument types**, so the docstring is what tells it *when* to use the tool. Write it well.
+- `model.bind_tools(tools)` tells the LLM which tools exist. Calling it directly shows the
+  raw idea: `content` is empty and `tool_calls` holds `[{'name': 'multiply', 'args': {...}}]`.
+
+**The two prebuilt pieces**
+- `ToolNode(tools)`: a ready-made node that reads the tool calls in the last AI message,
+  runs the functions and adds the results as `ToolMessage`s.
+- `tools_condition`: a ready-made router. Tool calls in the last message → go to the node
+  named **`'tools'`**; none → `END`. (Name the node `'tools'` or it won't find it.)
+- `add_edge('tools', 'chat_node')` closes the loop so the LLM sees the tool's result.
+
+**What the message list shows**
+- `human -> ai (tool call) -> tool (result) -> ai (answer)`. Every step is a message in
+  state, which is exactly why the `add_messages` reducer from section 5 is needed.
+
+**Gotchas**
+- The LLM **decides** whether to use a tool. "Hi" uses none; easy steps it may do itself
+  (it called `multiply` for 23×47 but added the 12 on its own). For must-be-exact work,
+  say so in the prompt or docstring.
+- Tool results come back as **strings**, whatever the function returned.

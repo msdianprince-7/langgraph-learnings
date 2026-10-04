@@ -7,3 +7,6 @@ ipykernel
 jupyter
 streamlit
 langgraph-checkpoint-sqlite
+langchain-community
+ddgs
+yfinance
