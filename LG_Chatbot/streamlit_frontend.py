@@ -1,6 +1,6 @@
 import streamlit as st
 from langchain_core.messages import HumanMessage
-from chatbot_backend import chatbot, generate_chat_title
+from chatbot_backend import chatbot, generate_chat_title, retrieve_all_threads
 import uuid
 
 
@@ -37,12 +37,22 @@ if 'thread_id' not in st.session_state:
     st.session_state['thread_id'] = generate_thread_id()
 
 if 'chat_threads' not in st.session_state:
-    st.session_state['chat_threads'] = [st.session_state['thread_id']]
+    # Old chats come from the database (newest first, so reverse to oldest first), then the new empty chat
+    st.session_state['chat_threads'] = retrieve_all_threads()[::-1] + [st.session_state['thread_id']]
 
 if 'thread_names' not in st.session_state:
-    st.session_state['thread_names'] = {}  # thread_id -> name shown in the sidebar
+    # thread_id -> name shown in the sidebar, read back from each saved chat's 'title'
+    st.session_state['thread_names'] = {}
+    for thread_id in st.session_state['chat_threads']:
+        title = chatbot.get_state(config={'configurable': {'thread_id': thread_id}}).values.get('title')
+        if title:
+            st.session_state['thread_names'][thread_id] = title
 
-CONFIG = {'configurable': {'thread_id': st.session_state['thread_id']}}
+CONFIG = {
+    'configurable': {'thread_id': st.session_state['thread_id']},  # checkpointer: which chat to load/save
+    'metadata': {'thread_id': st.session_state['thread_id']},      # LangSmith: groups every turn of a chat into one Thread
+    'run_name': 'chat_turn',                                       # LangSmith: name of each trace
+}
 
 # Sidebar
 st.sidebar.title('LangGraph Chatbot')
@@ -89,5 +99,7 @@ if user_input:
     # Ask the LLM for a title after the first message (only once per chat).
     # The sidebar was already drawn above, so rerun once to show the new name.
     if st.session_state['thread_id'] not in st.session_state['thread_names']:
-        st.session_state['thread_names'][st.session_state['thread_id']] = generate_chat_title(user_input)
+        title = generate_chat_title(user_input)
+        st.session_state['thread_names'][st.session_state['thread_id']] = title
+        chatbot.update_state(CONFIG, {'title': title})  # also save it in the database
         st.rerun()

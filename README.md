@@ -12,7 +12,7 @@ notebooks (and the `.py` files for the Streamlit app); this file is only the lea
 | `LG_ConditionalWorkflow` | Conditional edges, router functions (quadratic solver, LLM review reply) |
 | `LG_IterativeWorkflow` | Loops, stop conditions, recursion limit (number guessing, LLM tweet improver) |
 | `LG_Persistence` | Message state, `add_messages`, chat loop, persistence (checkpointer, threads) |
-| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies, multiple threads, switching conversations |
+| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies, multiple threads, switching conversations, SQLite persistence, LangSmith tracing |
 
 ---
 
@@ -280,8 +280,39 @@ Files: `chatbot_backend.py` (the graph), `streamlit_frontend.py` (the UI). Start
 - After the button changes the thread, call `st.rerun()` so the rest of the page is drawn
   with the new thread straight away.
 
-**Gotcha: the backend is imported once**
-- The import (and so the `InMemorySaver`) stays alive while the server runs, so memory
-  survives page reruns but is lost when you stop `streamlit run`.
+**Database persistence: SQLite checkpointer**
+- `InMemorySaver` loses every chat when the server stops. Swap it for
+  `SqliteSaver(conn=sqlite3.connect('chatbot.db', check_same_thread=False))` (package
+  `langgraph-checkpoint-sqlite`) and chats are saved in a file instead. Nothing else in
+  the graph changes, which is the whole point of the checkpointer design.
+- `check_same_thread=False` because Streamlit handles reruns on different threads, all
+  using the one connection made at import.
+- **Listing old chats:** `checkpointer.list(None)` returns every checkpoint in the
+  database, newest first. Collect the unique `thread_id`s and that's the conversation list
+  for the sidebar on startup.
+- **Anything not in the graph state is lost on restart.** Chat titles were only in
+  `session_state`, so they're now a `title` key in `ChatState`, written with
+  `chatbot.update_state(config, {'title': ...})` and read back with `get_state`.
+  `update_state` writes into a thread's saved state **without running the graph**.
+- **What's inside `chatbot.db`:** two tables. `checkpoints` has one row per saved
+  snapshot (thread_id, checkpoint_id, parent, the state stored as binary msgpack), and
+  `writes` has the individual node outputs. A short chat already makes many rows, since
+  every step is saved. Open it with any SQLite viewer to look around.
+- The `.db` file holds your chats, so it's in `.gitignore`.
+
+**Observability: LangSmith tracing, grouped by thread**
+- Tracing needs **no code**: `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` +
+  `LANGSMITH_PROJECT` in `.env`, and `load_dotenv()` makes every LangChain/LangGraph call
+  send a trace (graph → node → LLM call, with inputs, outputs, tokens and latency).
+- **One trace per `invoke`/`stream`**, so a conversation is many separate traces. To see
+  them as one chat, put the id in **`metadata`**: `{'metadata': {'thread_id': ...}}`.
+  LangSmith's **Threads** tab groups traces by a `thread_id` (or `session_id` /
+  `conversation_id`) metadata key.
+- Same id, two jobs, two places in the config: `configurable.thread_id` tells the
+  **checkpointer** which chat to load; `metadata.thread_id` tells **LangSmith** how to group.
+- `run_name` names the trace (`chat_turn` instead of the default `LangGraph`), which makes
+  the run list readable. Any `model.invoke(..., config={'run_name': ...})` works too.
+- The title call (`generate_chat_title`) gets a run name but **no thread_id**, on purpose:
+  it isn't a chat turn, so it shouldn't show up inside the conversation's thread.
 
 ---

@@ -6,3 +6,4 @@ python-dotenv
 ipykernel
 jupyter
 streamlit
+langgraph-checkpoint-sqlite
