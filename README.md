@@ -331,7 +331,19 @@ Files: `chatbot_backend.py` (the graph), `streamlit_frontend.py` (the UI). Start
 - One docstring line per tool decides when the LLM picks it ("ticker symbol, e.g. AAPL,
   or INFY.NS for NSE India"). It's the tool's instruction manual.
 
----
+**Going async (needed for MCP tools)**
+- MCP tools are **async-only**, so the graph must run async: `async def chat_node` with
+  `await model.ainvoke(...)`, `chatbot.astream(...)`, `aget_state`, `aupdate_state`, and
+  `AsyncSqliteSaver` (with an `aiosqlite` connection) instead of `SqliteSaver`.
+- Streamlit is **not async**. Fix: start **one asyncio event loop in a background thread**
+  and send every coroutine to it with `asyncio.run_coroutine_threadsafe(coro, loop).result()`.
+  One loop for everything, because the async DB connection is tied to the loop it was made on.
+- **Streaming across the gap:** the async stream runs on that loop and puts each chunk in a
+  `queue.Queue`; a normal generator on the Streamlit side reads the queue until a `None`
+  "done" marker. So `st.write_stream` still gets a plain generator.
+- The backend now hides LangGraph from the frontend behind small helpers (`stream_reply`,
+  `get_thread_values`, `save_title`), so all the async plumbing lives in one file.
+- Sync tools still work in an async graph: `ToolNode` runs them in a thread.
 
 ---
 

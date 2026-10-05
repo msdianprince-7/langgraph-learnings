@@ -1,6 +1,6 @@
 import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from chatbot_backend import chatbot, generate_chat_title, retrieve_all_threads
+from chatbot_backend import stream_reply, get_thread_values, save_title, generate_chat_title, retrieve_all_threads
 import uuid
 
 
@@ -17,8 +17,7 @@ def reset_chat():
 
 def load_conversation(thread_id):
     # The checkpointer has the full chat for this thread; a thread with no messages yet has empty values
-    state = chatbot.get_state(config={'configurable': {'thread_id': thread_id}})
-    messages = state.values.get('messages', [])
+    messages = get_thread_values(thread_id).get('messages', [])
 
     # Convert LangChain messages into the {'role', 'content'} format the UI uses
     # Skip tool results and the empty AI messages that only asked for a tool
@@ -47,7 +46,7 @@ if 'thread_names' not in st.session_state:
     # thread_id -> name shown in the sidebar, read back from each saved chat's 'title'
     st.session_state['thread_names'] = {}
     for thread_id in st.session_state['chat_threads']:
-        title = chatbot.get_state(config={'configurable': {'thread_id': thread_id}}).values.get('title')
+        title = get_thread_values(thread_id).get('title')
         if title:
             st.session_state['thread_names'][thread_id] = title
 
@@ -92,11 +91,8 @@ if user_input:
         status_holder = {'box': None}
 
         def ai_only_stream():
-            for message_chunk, metadata in chatbot.stream(
-                {'messages': [HumanMessage(content=user_input)]},
-                config=CONFIG,
-                stream_mode='messages',
-            ):
+            # stream_reply runs the async graph on the backend's event loop and hands the chunks back here
+            for message_chunk, metadata in stream_reply(user_input, CONFIG):
                 # A tool ran: show a status box instead of printing the raw tool output
                 if isinstance(message_chunk, ToolMessage):
                     tool_name = message_chunk.name
@@ -121,5 +117,5 @@ if user_input:
     if st.session_state['thread_id'] not in st.session_state['thread_names']:
         title = generate_chat_title(user_input)
         st.session_state['thread_names'][st.session_state['thread_id']] = title
-        chatbot.update_state(CONFIG, {'title': title})  # also save it in the database
+        save_title(CONFIG, title)  # also save it in the database
         st.rerun()
