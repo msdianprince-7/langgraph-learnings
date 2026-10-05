@@ -10,3 +10,5 @@ langgraph-checkpoint-sqlite
 langchain-community
 ddgs
 yfinance
+mcp
+langchain-mcp-adapters

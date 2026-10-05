@@ -6,9 +6,12 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import tool
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_groq import ChatGroq
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from typing import TypedDict, Annotated
 from dotenv import load_dotenv
+from pathlib import Path
 import asyncio
+import sys
 import threading
 import queue
 import aiosqlite
@@ -35,27 +38,24 @@ search_tool = DuckDuckGoSearchRun()  # ready-made LangChain tool: web search, no
 
 
 @tool
-def calculator(first_num: float, second_num: float, operation: str) -> str:
-    """Do basic arithmetic on two numbers. operation is one of: add, sub, mul, div."""
-    if operation == 'add':
-        return str(first_num + second_num)
-    elif operation == 'sub':
-        return str(first_num - second_num)
-    elif operation == 'mul':
-        return str(first_num * second_num)
-    elif operation == 'div':
-        return str(first_num / second_num) if second_num != 0 else 'Division by zero is not allowed'
-    return f'Unsupported operation: {operation}'
-
-
-@tool
 def get_stock_price(symbol: str) -> str:
     """Get the latest stock price for a ticker symbol, e.g. AAPL, TSLA, or INFY.NS for NSE India."""
     price = yf.Ticker(symbol).fast_info['last_price']
     return f'{symbol.upper()}: {price:.2f}'
 
 
-tools = [search_tool, calculator, get_stock_price]
+# The calculator now lives in its own MCP server. The client starts it as a subprocess
+# (same Python as this app) and turns its MCP tools into normal LangChain tools.
+mcp_client = MultiServerMCPClient({
+    'calculator': {
+        'transport': 'stdio',
+        'command': sys.executable,
+        'args': [str(Path(__file__).parent / 'calculator_mcp_server.py')],
+    },
+})
+mcp_tools = run_async(mcp_client.get_tools())  # async-only, so it runs on the background loop
+
+tools = [search_tool, get_stock_price, *mcp_tools]
 model_with_tools = model.bind_tools(tools)
 
 
