@@ -345,6 +345,19 @@ Files: `chatbot_backend.py` (the graph), `streamlit_frontend.py` (the UI). Start
   `get_thread_values`, `save_title`), so all the async plumbing lives in one file.
 - Sync tools still work in an async graph: `ToolNode` runs them in a thread.
 
+**MCP: tools from a separate server**
+- **MCP (Model Context Protocol)** is a standard way for an app to get tools from a separate
+  program, the **MCP server**. Write a tool once and any MCP client (this chatbot, Claude
+  Desktop, an IDE) can use it.
+- Server side (`calculator_mcp_server.py`): `FastMCP('calculator')`, decorate functions with
+  `@mcp.tool()`, then `mcp.run(transport='stdio')`. The docstring is still what the LLM reads.
+- Client side: `MultiServerMCPClient({...})` from `langchain-mcp-adapters` starts the server
+  as a subprocess (`'transport': 'stdio'`, `'command': sys.executable`, `'args': [path]`) and
+  `await client.get_tools()` returns normal LangChain tools to mix with local ones.
+- `get_tools()` and the MCP tools are **async-only**, which is why the chatbot went async first.
+- The graph doesn't change at all: MCP tools go into the same `tools` list, `bind_tools` and
+  `ToolNode`. Only *where the tool runs* changed.
+
 ---
 
 ## 7. Tools
