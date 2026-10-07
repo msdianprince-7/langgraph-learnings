@@ -8,8 +8,9 @@
    Each topic folder gets a `run.bat` that calls `..\venv\Scripts\python.exe`.
    Code is written as Jupyter notebooks (`.ipynb`); `run.bat` opens Jupyter with the venv.
    Exception: Streamlit apps (`LG_Chatbot`) are plain `.py` files in one folder, split by
-   file name (`*_backend.py` for the graph, `*_frontend.py` for Streamlit), no subfolders;
-   their `run.bat` runs `streamlit run`.
+   file name (`*_backend.py` for the graph, `*_frontend.py` for Streamlit,
+   `*_mcp_server.py` for MCP tool servers), no subfolders; their `run.bat` runs `streamlit run`.
+   The chatbot backend is async (one background event loop); keep new graph code async.
    Use Groq models that work on this account: `openai/gpt-oss-20b`, `openai/gpt-oss-120b`.
 3. **Code style:** the user is learning, so write the smallest code that shows the concept.
    No error handling, caching, docstrings or helper abstractions unless asked.
