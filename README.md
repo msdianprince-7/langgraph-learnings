@@ -50,6 +50,16 @@ Notebooks: `bmi_workflow.ipynb`, `llm_workflow.ipynb`, `prompt_chaining.ipynb`
 - Small focused prompts beat one giant prompt, and each step's output can be checked
   on its own.
 
+**Interview questions**
+- *What are the three building blocks of a LangGraph graph?* State (shared data, a
+  `TypedDict`), nodes (functions that read and update state), edges (what runs next).
+- *Why do you have to call `compile()`?* It checks the structure (e.g. no unreachable nodes,
+  edges point to real nodes) and turns the builder into a runnable you can `invoke`/`stream`.
+- *What does `invoke` return?* The final state, including every intermediate value the
+  nodes wrote, not just the last node's output.
+- *Why use prompt chaining instead of one big prompt?* Each step is simpler, so results
+  are better, and you can inspect, test or retry one step on its own.
+
 ---
 
 ## 2. Parallel Workflow
