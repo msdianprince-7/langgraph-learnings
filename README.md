@@ -98,6 +98,17 @@ Notebooks: `simple_parallel.ipynb`, `llm_parallel.ipynb`
   (`feedback`, `score`) instead of free text, so a node can read `result.score` directly.
 - Parallel LLM calls also save time: the three judges run together, not one after another.
 
+**Interview questions**
+- *How do you run nodes in parallel in LangGraph?* Fan out: add edges from one node to
+  several nodes. Fan in: add an edge from each of them into one node, which waits for all.
+- *Why must parallel nodes return partial dicts?* They run in the same step; if each returns
+  the whole state, several nodes write the same keys at once and LangGraph raises
+  `InvalidUpdateError`.
+- *What is a reducer and when do you need one?* A function that says how to combine updates
+  to a key (`Annotated[list, operator.add]`), needed when several nodes write the same key.
+- *Without a reducer, what happens to a key that two nodes update in sequence?* The later
+  value overwrites the earlier one.
+
 ---
 
 ## 3. Conditional Workflow
