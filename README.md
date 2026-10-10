@@ -14,6 +14,7 @@ notebooks (and the `.py` files for the Streamlit app); this file is only the lea
 | `LG_Persistence` | Message state, `add_messages`, chat loop, persistence (checkpointer, threads) |
 | `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies, multiple threads, switching conversations, SQLite persistence, LangSmith tracing, tools (search, calculator, stocks), MCP, async, RAG over uploaded PDFs |
 | `LG_Tools` | Tool calling: `@tool`, `bind_tools`, `ToolNode`, `tools_condition` |
+| `LG_HumanInTheLoop` | `interrupt()`, `Command(resume=...)`, approve / reject / edit |
 
 ---
 
@@ -434,3 +435,36 @@ Notebooks: `tool_calling.ipynb`
   (it called `multiply` for 23×47 but added the 12 on its own). For must-be-exact work,
   say so in the prompt or docstring.
 - Tool results come back as **strings**, whatever the function returned.
+
+---
+
+## 8. Human-in-the-Loop
+
+Notebooks: `simple_hitl.ipynb`
+
+**The mental model**
+- The graph **pauses mid-run**, waits for a person, then **continues from the same spot**
+  with their answer. Used before anything risky or irreversible: posting, sending an email,
+  paying, deleting, or when the AI isn't sure.
+- Example: the LLM drafts a LinkedIn post → the graph stops at `human_review` → the human
+  approves, rejects or edits → the graph publishes or ends.
+
+**`interrupt()` and `Command(resume=...)`**
+- Inside a node, `answer = interrupt(payload)` stops the graph. The first `invoke` returns
+  with `result['__interrupt__'][0].value == payload` (what the human should see), and
+  `get_state(config).next` shows the node that's waiting.
+- Resume with `workflow.invoke(Command(resume='approve'), config=config)`, **same thread_id**.
+  The value passed to `resume` becomes the return value of `interrupt()`.
+- **A checkpointer is required.** The paused state has to be saved somewhere while the human
+  takes seconds or days to answer, which is why HITL builds on persistence (section 5).
+- The `thread_id` is how the resume finds the right paused run; several runs can be waiting
+  at once, one per thread.
+
+**Gotchas**
+- On resume, the paused node **runs again from its first line**, and this time `interrupt()`
+  returns the answer instead of pausing. So don't put side effects (API calls, DB writes)
+  *before* `interrupt()` in the same node, or they run twice.
+- The resume value can be anything: a word ("approve"), edited text, or a dict. The node
+  decides what it means.
+- When a router returns `END` directly, list the destinations:
+  `add_conditional_edges('human_review', route_decision, ['publish', END])`.
