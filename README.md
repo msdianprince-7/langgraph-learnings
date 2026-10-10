@@ -15,6 +15,7 @@ notebooks (and the `.py` files for the Streamlit app); this file is only the lea
 | `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies, multiple threads, switching conversations, SQLite persistence, LangSmith tracing, tools (search, calculator, stocks), MCP, async, RAG over uploaded PDFs |
 | `LG_Tools` | Tool calling: `@tool`, `bind_tools`, `ToolNode`, `tools_condition` |
 | `LG_HumanInTheLoop` | `interrupt()`, `Command(resume=...)`, approve / reject / edit |
+| `LG_Subgraphs` | Subgraphs with shared state (as a node) and different state (called in a node) |
 
 ---
 
@@ -468,3 +469,34 @@ Notebooks: `simple_hitl.ipynb`
   decides what it means.
 - When a router returns `END` directly, list the destinations:
   `add_conditional_edges('human_review', route_decision, ['publish', END])`.
+
+---
+
+## 9. Subgraphs
+
+Notebooks: `shared_state_subgraph.ipynb`, `different_state_subgraph.ipynb`
+
+**The mental model**
+- A **subgraph** is a compiled graph used as one step inside another graph. Like a function
+  in code: build a piece once (an editor, a translator, a research agent), then reuse it.
+- It's how big agent systems stay manageable, and how multi-agent setups work: each agent
+  is its own subgraph.
+
+**Type 1: shared state → add it directly as a node**
+- The subgraph's state shares keys with the parent (`draft`, `final`), so
+  `add_node('editor', editor_subgraph)` just works; LangGraph copies the shared keys in and out.
+- Keys only the subgraph has (`fixed`) stay **private**: they don't appear in the parent result.
+- Use when the subgraph works on the same data as the parent (same `messages` list, same draft).
+
+**Type 2: different state → call it inside a node**
+- The subgraph has its own keys (`text`, `language`, `translated`) and nothing in common with
+  the parent (`question`, `answer_english`, `answer_hindi`).
+- A normal parent node does the mapping: `result = subgraph.invoke({'text': ...})`, then
+  `return {'answer_hindi': result['translated']}`.
+- Use when the subgraph is a **reusable, self-contained component** with its own interface.
+  The translator works with any language and is called on its own just as easily.
+
+**Seeing inside**
+- `workflow.get_graph(xray=True)` draws the subgraph's nodes inside the parent drawing.
+- `workflow.stream(..., stream_mode='updates', subgraphs=True)` yields `(namespace, update)`:
+  an empty namespace means the parent, `('editor:<id>',)` means inside the editor subgraph.
