@@ -17,3 +17,5 @@ sentence-transformers
 faiss-cpu
 pypdf
 langchain-text-splitters
+langgraph-checkpoint-postgres
+psycopg[binary]

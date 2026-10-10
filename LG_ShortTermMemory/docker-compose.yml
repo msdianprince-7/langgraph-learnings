@@ -1,0 +1,21 @@
+# Local Postgres for the LangGraph checkpointer (learning only: simple password, local port).
+# Start:  docker compose up -d --wait      Stop: docker compose down      (data stays in the volume)
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: langgraph
+      POSTGRES_PASSWORD: langgraph
+      POSTGRES_DB: langgraph_memory
+    ports:
+      - "5442:5432"            # 5432 and 5433 are already used on this machine
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # survives container restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langgraph -d langgraph_memory"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata:

@@ -16,6 +16,7 @@ notebooks (and the `.py` files for the Streamlit app); this file is only the lea
 | `LG_Tools` | Tool calling: `@tool`, `bind_tools`, `ToolNode`, `tools_condition` |
 | `LG_HumanInTheLoop` | `interrupt()`, `Command(resume=...)`, approve / reject / edit |
 | `LG_Subgraphs` | Subgraphs with shared state (as a node) and different state (called in a node) |
+| `LG_ShortTermMemory` | Per-thread memory with `InMemorySaver` and `PostgresSaver` (Docker), `MessagesState`, trimming, deleting, summarising |
 
 ---
 
@@ -500,3 +501,92 @@ Notebooks: `shared_state_subgraph.ipynb`, `different_state_subgraph.ipynb`
 - `workflow.get_graph(xray=True)` draws the subgraph's nodes inside the parent drawing.
 - `workflow.stream(..., stream_mode='updates', subgraphs=True)` yields `(namespace, update)`:
   an empty namespace means the parent, `('editor:<id>',)` means inside the editor subgraph.
+
+---
+
+## 10. Short-Term Memory
+
+Notebooks: `in_memory_saver.ipynb`, `postgres_saver.ipynb`, `trimming.ipynb`, `deleting.ipynb`, `summarizing.ipynb`
+
+**The mental model**
+- **Short-term memory** = what the bot remembers **within one conversation** (one
+  `thread_id`): the message list. The checkpointer saves it after every step; the next turn
+  on the same thread starts from it, and `add_messages` appends the new message.
+- New `thread_id` = new conversation = empty memory. (Remembering things *across*
+  conversations, like a user's name in every chat, is **long-term memory**, a different tool.)
+
+**`InMemorySaver`**
+- `graph.compile(checkpointer=InMemorySaver())`, then pass
+  `{'configurable': {'thread_id': ...}}` on every call.
+- Stores everything in **RAM**: ideal for learning, notebooks and tests; lost when the
+  program stops. For real apps swap in `SqliteSaver` / `PostgresSaver`; the graph is unchanged.
+- `MessagesState` is a built-in state with just `messages: Annotated[list, add_messages]`,
+  so a chatbot doesn't need its own `TypedDict`.
+
+**The catch: memory grows every turn**
+- The **whole history** goes to the LLM on every turn. Prompt tokens per turn went
+  85 → 153 → 262 → 301 → 335 → 367 over six short turns (`message.usage_metadata['input_tokens']`).
+- Longer chats = more cost, slower replies, and eventually the model's context limit.
+  That's why short-term memory needs **managing**: trimming old messages, deleting them,
+  or summarising them.
+
+**`PostgresSaver`: the same memory in a real database** (`postgres_saver.ipynb`)
+- Postgres runs in **Docker**: `docker compose up -d --wait` in `LG_ShortTermMemory` starts it
+  from `docker-compose.yml` (port **5442**, since 5432/5433 are taken on this machine). Data
+  lives in a Docker **volume**, so it survives `docker compose down` and container restarts.
+- Connect with `psycopg`: `Connection.connect(DB_URI, autocommit=True, prepare_threshold=0,
+  row_factory=dict_row)`. `PostgresSaver` needs autocommit (each checkpoint is written right
+  away) and dict rows.
+- `checkpointer.setup()` creates LangGraph's tables the first time; safe to call every time.
+- The graph code is **identical**; only `compile(checkpointer=PostgresSaver(conn))` changes.
+- Proof it's durable: close the connection, build a brand-new checkpointer and graph (a
+  simulated restart), and the bot still knows the name and favourite food.
+- Inside the database: `checkpoints` (one row per saved step), `checkpoint_blobs` (the large
+  values like message lists), `checkpoint_writes` (node outputs), `checkpoint_migrations`
+  (schema version). Two turns already made 9 checkpoints.
+- **InMemorySaver vs SQLite vs Postgres:** RAM for tests; a file for one app on one machine;
+  a database server for production, where many app instances and users share one memory.
+
+**Managing memory, option 1: trimming** (`trimming.ipynb`)
+- `trim_messages(messages, max_tokens=..., token_counter=count_tokens_approximately,
+  strategy='last', start_on='human', include_system=True)` keeps the **most recent messages
+  that fit the budget** and drops the oldest.
+- `start_on='human'` stops the trimmed list from starting with an orphan AI reply (or a tool
+  result without its tool call, which some models reject). `include_system=True` always keeps
+  the system prompt.
+- Trim **inside the node, only for the LLM call**. The state and checkpointer still hold the
+  full history; trimming just limits what the model sees.
+- Result: stored messages grew 2 → 14, but the prompt **levelled off** at ~180–190 tokens
+  instead of growing every turn.
+- The price: the name was in the oldest messages, so after a few turns the bot answered
+  "I don't have that information". Trimming forgets **old facts**, which is why there's
+  also **summarising** (keep the gist of old messages) and long-term memory (store facts).
+- `count_tokens_approximately` is a fast estimate, not the provider's exact count, and the
+  API adds its own overhead, so leave headroom below the model's real limit.
+
+**Managing memory, option 2: deleting** (`deleting.ipynb`)
+- Return `{'messages': [RemoveMessage(id=m.id) for m in old]}` from a node and `add_messages`
+  **deletes** those messages from the state, so they're gone from the checkpointer too
+  (trimming only hid them from the LLM).
+- A `delete_old_messages` node after `chat_node` keeping the last 4: the stored chat stayed
+  at **4 messages** forever, and the name was lost for good once the intro was deleted.
+- Clear a whole thread ("Clear chat" button) from outside the graph:
+  `chatbot.update_state(config, {'messages': [RemoveMessage(id=REMOVE_ALL_MESSAGES)]})`.
+- Deleting needs message **ids**; messages get one automatically when `add_messages` stores them.
+
+**Managing memory, option 3: summarising** (`summarizing.ipynb`)
+- Extra state key: `class ChatState(MessagesState): summary: str`.
+- After `chat_node`, a router checks the length; over 6 messages → a `summarize` node asks
+  the LLM to **write or extend** the summary, then deletes all but the last 2 messages.
+- `chat_node` puts the summary in front as a `SystemMessage` every turn, so the LLM still
+  "remembers" what was deleted.
+- Result: the intro was deleted, yet "What is my name, where do I live and what am I
+  learning?" → "Priyansh, Jaipur, LangGraph". Small prompt **and** no forgotten facts.
+- Costs one extra LLM call each time it summarises, and the summary can lose detail, so tell
+  the summariser what must be kept ("keep names and facts about the user").
+
+**Which to use**
+- **Trim:** simplest; fine when old messages don't matter (most short chats).
+- **Delete:** when stored history must stay small, or for "clear chat" / privacy.
+- **Summarise:** long conversations where early facts still matter.
+- Facts that must survive *across* threads → long-term memory.
