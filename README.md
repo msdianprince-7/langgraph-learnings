@@ -378,6 +378,10 @@ Files: `chatbot_backend.py` (the graph), `streamlit_frontend.py` (the UI). Start
 - `get_tools()` and the MCP tools are **async-only**, which is why the chatbot went async first.
 - The graph doesn't change at all: MCP tools go into the same `tools` list, `bind_tools` and
   `ToolNode`. Only *where the tool runs* changed.
+- **How to tell the MCP server really ran:** its `ToolMessage.content` is a list of content
+  blocks (`[{'type': 'text', 'text': '31792582.26'}]`), not the plain string a local tool returns.
+- The LLM still decides whether to call it: "987 ÷ 21" it did in its head, so to test the MCP
+  path, ask it explicitly to "use the calculator tool".
 
 ---
 
