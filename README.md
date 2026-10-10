@@ -12,7 +12,7 @@ notebooks (and the `.py` files for the Streamlit app); this file is only the lea
 | `LG_ConditionalWorkflow` | Conditional edges, router functions (quadratic solver, LLM review reply) |
 | `LG_IterativeWorkflow` | Loops, stop conditions, recursion limit (number guessing, LLM tweet improver) |
 | `LG_Persistence` | Message state, `add_messages`, chat loop, persistence (checkpointer, threads) |
-| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies, multiple threads, switching conversations, SQLite persistence, LangSmith tracing, tools (search, calculator, stocks) |
+| `LG_Chatbot` | Streamlit chat UI over the LangGraph backend, streaming replies, multiple threads, switching conversations, SQLite persistence, LangSmith tracing, tools (search, calculator, stocks), MCP, async, RAG over uploaded PDFs |
 | `LG_Tools` | Tool calling: `@tool`, `bind_tools`, `ToolNode`, `tools_condition` |
 
 ---
@@ -382,6 +382,22 @@ Files: `chatbot_backend.py` (the graph), `streamlit_frontend.py` (the UI). Start
   blocks (`[{'type': 'text', 'text': '31792582.26'}]`), not the plain string a local tool returns.
 - The LLM still decides whether to call it: "987 ÷ 21" it did in its head, so to test the MCP
   path, ask it explicitly to "use the calculator tool".
+
+**RAG as a tool: chat with your PDF**
+- Upload a PDF in the sidebar → `PyPDFLoader` (one Document per page, page number kept in
+  metadata) → `RecursiveCharacterTextSplitter` (1000 / 200 overlap) → local
+  `HuggingFaceEmbeddings` (all-MiniLM-L6-v2, no API key) → a `FAISS` index.
+- Retrieval is just **another tool**: `rag_tool(query)` returns the top 4 chunks with their
+  page numbers, and the LLM decides when to call it, the same as search or the calculator.
+  This is "agentic RAG": no retrieval for "hi", retrieval for "what does my policy say".
+- **One PDF per chat.** The index is keyed by `thread_id`. The tool gets the thread from
+  `config: RunnableConfig`, a parameter **LangGraph fills in, not the LLM**, so the model
+  only sends `query` and can never read another chat's document.
+- Indexes are saved with `save_local` to `rag_indexes/<thread_id>` (gitignored) and loaded on
+  demand, so a chat's PDF survives a restart just like its messages.
+  `load_local` needs `allow_dangerous_deserialization=True` because FAISS indexes are
+  pickles; fine for files you wrote yourself, never for files from someone else.
+- Returning `[page N]` with each chunk lets the LLM cite where the answer came from.
 
 ---
 

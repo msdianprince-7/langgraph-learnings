@@ -1,6 +1,7 @@
 import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from chatbot_backend import stream_reply, get_thread_values, save_title, generate_chat_title, retrieve_all_threads
+from chatbot_backend import (stream_reply, get_thread_values, save_title, generate_chat_title,
+                             retrieve_all_threads, ingest_pdf, has_document)
 import uuid
 
 
@@ -62,6 +63,16 @@ st.sidebar.title('LangGraph Chatbot')
 if st.sidebar.button('Start Chat'):
     reset_chat()
     st.rerun()  # rerun now so CONFIG and the page use the new thread straight away
+
+# PDF for this chat. key per thread, so switching chats gives each one its own upload box
+uploaded = st.sidebar.file_uploader('Upload a PDF to chat with', type='pdf', key=f"pdf_{st.session_state['thread_id']}")
+if uploaded and st.session_state.get('indexed_file') != (st.session_state['thread_id'], uploaded.name):
+    with st.sidebar.status('Indexing PDF…') as box:
+        info = ingest_pdf(uploaded.getvalue(), st.session_state['thread_id'], uploaded.name)
+        box.update(label=f"📄 {info['filename']}: {info['pages']} pages, {info['chunks']} chunks", state='complete')
+    st.session_state['indexed_file'] = (st.session_state['thread_id'], uploaded.name)  # don't re-index on every rerun
+elif has_document(st.session_state['thread_id']):
+    st.sidebar.caption('📄 A PDF is attached to this chat')
 
 st.sidebar.header('My Conversations')
 

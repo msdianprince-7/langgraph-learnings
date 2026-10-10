@@ -12,3 +12,8 @@ ddgs
 yfinance
 mcp
 langchain-mcp-adapters
+langchain-huggingface
+sentence-transformers
+faiss-cpu
+pypdf
+langchain-text-splitters

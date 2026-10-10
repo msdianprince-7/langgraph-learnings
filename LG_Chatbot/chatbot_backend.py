@@ -4,7 +4,12 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
 from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_groq import ChatGroq
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from typing import TypedDict, Annotated
@@ -12,6 +17,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 import asyncio
 import sys
+import tempfile
 import threading
 import queue
 import aiosqlite
@@ -55,7 +61,51 @@ mcp_client = MultiServerMCPClient({
 })
 mcp_tools = run_async(mcp_client.get_tools())  # async-only, so it runs on the background loop
 
-tools = [search_tool, get_stock_price, *mcp_tools]
+# ---------- RAG: one PDF per chat ----------
+# Free local embedding model (downloaded once, then runs on the CPU)
+embeddings = HuggingFaceEmbeddings(model_name='sentence-transformers/all-MiniLM-L6-v2')
+INDEX_DIR = Path(__file__).parent / 'rag_indexes'  # one saved FAISS index per thread_id
+_retrievers = {}  # thread_id -> retriever, cached in memory after the first load
+
+
+# Called by the frontend when a PDF is uploaded: load -> split -> embed -> save the index
+def ingest_pdf(file_bytes, thread_id, filename):
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
+        f.write(file_bytes)
+    docs = PyPDFLoader(f.name).load()  # one Document per page, page number kept in metadata
+    Path(f.name).unlink()
+
+    chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200).split_documents(docs)
+    vector_store = FAISS.from_documents(chunks, embeddings)
+    vector_store.save_local(str(INDEX_DIR / thread_id))  # saved to disk so it survives a restart
+    _retrievers[thread_id] = vector_store.as_retriever(search_kwargs={'k': 4})
+    return {'filename': filename, 'pages': len(docs), 'chunks': len(chunks)}
+
+
+def _get_retriever(thread_id):
+    if thread_id not in _retrievers and (INDEX_DIR / thread_id).exists():
+        # allow_dangerous_deserialization: FAISS indexes are pickles; safe here because we wrote them
+        store = FAISS.load_local(str(INDEX_DIR / thread_id), embeddings, allow_dangerous_deserialization=True)
+        _retrievers[thread_id] = store.as_retriever(search_kwargs={'k': 4})
+    return _retrievers.get(thread_id)
+
+
+def has_document(thread_id):
+    return _get_retriever(thread_id) is not None
+
+
+@tool
+def rag_tool(query: str, config: RunnableConfig) -> str:
+    """Search the PDF the user uploaded in this chat. Use it for any question about the uploaded document."""
+    # config is filled in by LangGraph, not by the LLM: it tells the tool which chat is asking
+    retriever = _get_retriever(config['configurable']['thread_id'])
+    if retriever is None:
+        return 'No document has been uploaded in this chat. Ask the user to upload a PDF first.'
+    results = retriever.invoke(query)
+    return '\n\n'.join(f"[page {doc.metadata.get('page', 0) + 1}] {doc.page_content}" for doc in results)
+
+
+tools = [search_tool, get_stock_price, rag_tool, *mcp_tools]
 model_with_tools = model.bind_tools(tools)
 
 
