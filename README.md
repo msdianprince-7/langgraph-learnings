@@ -17,6 +17,7 @@ notebooks (and the `.py` files for the Streamlit app); this file is only the lea
 | `LG_HumanInTheLoop` | `interrupt()`, `Command(resume=...)`, approve / reject / edit |
 | `LG_Subgraphs` | Subgraphs with shared state (as a node) and different state (called in a node) |
 | `LG_ShortTermMemory` | Per-thread memory with `InMemorySaver` and `PostgresSaver` (Docker), `MessagesState`, trimming, deleting, summarising |
+| `LG_LongTermMemory` | Store, namespaces per user, LLM-decided memories shared across threads, one profile per user (no duplicates), `PostgresStore` (Docker) |
 
 ---
 
@@ -590,3 +591,76 @@ Notebooks: `in_memory_saver.ipynb`, `postgres_saver.ipynb`, `trimming.ipynb`, `d
 - **Delete:** when stored history must stay small, or for "clear chat" / privacy.
 - **Summarise:** long conversations where early facts still matter.
 - Facts that must survive *across* threads → long-term memory.
+
+---
+
+## 11. Long-Term Memory
+
+Notebooks: `in_memory_store.ipynb`, `memory_profile.ipynb`, `postgres_store.ipynb`
+
+**The mental model**
+- **Short-term** memory = one conversation (`thread_id`, saved by the **checkpointer**).
+- **Long-term** memory = facts about a **user** (`user_id`, saved in a **Store**), available
+  in **every** thread. A new chat is empty short-term, but the bot still knows who you are.
+- A graph uses both: `graph.compile(checkpointer=InMemorySaver(), store=InMemoryStore())`,
+  with both ids in the config: `{'configurable': {'user_id': 'user-1', 'thread_id': 'chat-2'}}`.
+
+**The Store**
+- A key-value database organised by **namespace**, a tuple like a folder path:
+  `('user-1', 'memories')`. `store.put(ns, key, {'text': ...})`, `store.get(ns, key)`,
+  `store.search(ns)` lists everything in it.
+- Namespaces keep users apart: user-2's namespace is empty, so the bot knows nothing about them.
+- Nodes get the store by asking for it: `def node(state, config: RunnableConfig, *, store: BaseStore)`.
+  LangGraph passes both in; the `user_id` comes from `config['configurable']`.
+
+**Writing memories: let the LLM decide**
+- A `remember` node runs before the reply: structured output (`should_save`, `facts`) decides
+  whether the message holds a **lasting fact**. "Suggest a weekend plan" saves nothing;
+  "I'm Priyansh from Jaipur, a data analyst" saves three facts.
+- Show it what's **already known**, so it only adds new facts instead of duplicates.
+- Tell it the exact format ("User ...", one fact per item), or facts come back inconsistent
+  ("I love cricket" vs "User loves cricket").
+
+**Reading memories**
+- `chat_node` loads the user's memories and puts them in a `SystemMessage`. That's how a
+  new thread could plan "a cricket catch-up, a bit of data fun and Jaipur charm" without
+  being told anything in that chat.
+
+**The duplicate problem, and the fix** (`memory_profile.ipynb`)
+- Saving each fact as a **new item** (`put` with a fresh `uuid`) duplicates: repeating
+  yourself in new chats grew 5 facts to 12 ("User name is Priyansh" three times), and
+  "I moved to Bangalore" left "from Jaipur" behind. Telling the LLM "only add new facts"
+  is not enough.
+- Fix: **one profile per user under one key** (`put(ns, 'profile', {'facts': [...]})`).
+  The `remember` node gives the LLM the current profile + the new message and gets back the
+  **complete updated profile** (`changed: bool`, `facts: list`), with rules: keep what's still
+  true, replace changed facts, never list a fact twice, small talk changes nothing.
+- `put` on the same key **overwrites**, so duplicates can't pile up. Only write when
+  `changed` is true.
+- Result: the profile stayed at **5 facts** after the repeats, "User city is Jaipur" became
+  "User city is Bangalore", and a brand-new thread answered "You live in Bangalore, you
+  work as a data analyst".
+- Trade-offs: the whole profile goes to the LLM on every message (fine for a short profile),
+  and since the LLM rewrites the list, a careless rewrite could drop a fact; the rules in
+  the prompt are what prevent that.
+
+**Long-term memory in Postgres** (`postgres_store.ipynb`)
+- Same two-node profile chatbot; only storage changes: `PostgresStore` for the profile
+  (long-term) and `PostgresSaver` for the chat history (short-term), both in a Postgres
+  container from this folder's `docker-compose.yml` (port **5443**).
+- `store.setup()` and `checkpointer.setup()` create their tables on first run; the graph and
+  nodes are **unchanged**, only `compile(checkpointer=..., store=...)` gets the new objects.
+- **Give the store and the checkpointer separate connections.** `PostgresStore` uses psycopg's
+  *pipeline* mode; sharing one connection with `PostgresSaver` failed mid-run with
+  `'NoneType' object has no attribute '_fetch_gen'`.
+- Restart test: close both connections, build new ones, and the profile is still there; a new
+  thread planned a weekend "with cricket and Jaipur" from the database alone.
+- In the database the whole profile is **one row** in the `store` table
+  (`prefix = pg-user-1.memories`, `key = profile`, `value = {'facts': [...]}`), next to the
+  checkpoint tables. One row per user is the no-duplicates design, visible in SQL.
+
+**Gotchas**
+- `InMemoryStore` is RAM only, like `InMemorySaver`. For real apps use a database-backed
+  store (e.g. `PostgresStore`); the nodes don't change.
+- Groq + gpt-oss: `with_structured_output(...)` failed with "Tool choice is required, but model
+  did not call a tool". `with_structured_output(Schema, method='json_schema')` fixed it.

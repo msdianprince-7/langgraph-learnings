@@ -1,0 +1,21 @@
+# Local Postgres for LangGraph long-term memory (learning only: simple password, local port).
+# Start:  docker compose up -d --wait      Stop: docker compose down      (data stays in the volume)
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: langgraph
+      POSTGRES_PASSWORD: langgraph
+      POSTGRES_DB: langgraph_ltm
+    ports:
+      - "5443:5432"            # 5432, 5433 and 5442 are used by other projects on this machine
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # survives container restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langgraph -d langgraph_ltm"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata:
