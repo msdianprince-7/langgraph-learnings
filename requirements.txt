@@ -19,3 +19,4 @@ pypdf
 langchain-text-splitters
 langgraph-checkpoint-postgres
 psycopg[binary]
+langchain-tavily

@@ -18,6 +18,7 @@ notebooks (and the `.py` files for the Streamlit app); this file is only the lea
 | `LG_Subgraphs` | Subgraphs with shared state (as a node) and different state (called in a node) |
 | `LG_ShortTermMemory` | Per-thread memory with `InMemorySaver` and `PostgresSaver` (Docker), `MessagesState`, trimming, deleting, summarising |
 | `LG_LongTermMemory` | Store, namespaces per user, LLM-decided memories shared across threads, one profile per user (no duplicates), `PostgresStore` (Docker) |
+| `LG_BlogPlanner` | Project: blog-writing agent. Router, Tavily research, structured plan, `Send` fan-out to parallel section writers, merge into one Markdown file |
 
 ---
 
@@ -664,3 +665,56 @@ Notebooks: `in_memory_store.ipynb`, `memory_profile.ipynb`, `postgres_store.ipyn
   store (e.g. `PostgresStore`); the nodes don't change.
 - Groq + gpt-oss: `with_structured_output(...)` failed with "Tool choice is required, but model
   did not call a tool". `with_structured_output(Schema, method='json_schema')` fixed it.
+
+---
+
+## 12. Blog Planner (project)
+
+Notebook: `blog_planner.ipynb` (based on stage 3 of
+[campusx-official/blog-writing-agent](https://github.com/campusx-official/blog-writing-agent),
+adapted to Groq + `langchain-tavily`). The `.md` files in the folder are blogs it wrote.
+
+**The flow**
+- `router -> (research) -> orchestrator -> worker x N (parallel) -> reducer`.
+- **Router**: an LLM with structured output (`RouterDecision`) decides if the topic needs web
+  search: `closed_book` (evergreen, skip research), `hybrid` or `open_book` (news, latest,
+  pricing), plus the search queries. A conditional edge skips `research` when not needed.
+- **Research**: Tavily results go to an LLM that keeps a deduplicated `EvidencePack`
+  (title, url, snippet). Planner and workers may only cite these URLs.
+- **Orchestrator**: one LLM call returns a `Plan` (title, audience, tone, list of `Task`s).
+- **Fan-out with `Send`**: the conditional edge returns `[Send("worker", payload) ...]`,
+  one per task, so the number of parallel workers is decided at runtime.
+- **Reducer**: joins the sections and saves one `.md` file.
+
+**Orchestrator-worker pattern**
+- `Send(node, payload)` runs a node with **its own small payload**, not the whole state.
+  The worker's input is that dict.
+- Workers write into `sections: Annotated[List[...], operator.add]`; without the reducer,
+  parallel writes to one key error out.
+- Workers return `(task_id, markdown)` and the reducer sorts by id, so section order never
+  depends on who finished first.
+
+**Better output comes from the plan, not the writer**
+- `Field(description=...)` is a prompt: the planner LLM reads it.
+- A richer `Task` (`goal`, 3-5 `bullets` via `min_length`/`max_length`, `target_words`,
+  `Literal` section type) turned a generic blog into a structured, technical one.
+- Split prompts by job: the orchestrator prompt decides **what** goes in (structure, ordering,
+  "no vague bullets"), the worker prompt decides **how** each section is written.
+- Without research the LLM invents APIs (`LLMNode`, `graph.run()`); research + "cite only these
+  URLs" grounds it (26 real source links in the 2026 multimodal blog).
+
+**Gotchas (Groq free tier + gpt-oss)**
+- **Rate limit 8k tokens/minute per model**: 6-9 parallel workers blow it. `ChatGroq(...,
+  max_retries=10)` makes the client wait and retry on 429. Keep Tavily results small
+  (4 queries x 4 results, snippets cut to 300 chars).
+- `with_structured_output` fails at random (`tool_use_failed`, cut-off JSON, a call to a tool
+  named `JSON`). `.with_retry(stop_after_attempt=3)` fixes it. `gpt-oss-20b` failed the
+  richer schema; use `gpt-oss-120b`.
+- `method="json_schema"` is **not** a cure here: the model wrapped a list of objects as
+  `{"items": [...]}` every time and Groq rejected it. Default tool calling + retry worked.
+- **Windows file names**: a `:` in the title doesn't error, it creates a hidden alternate data
+  stream (0-byte file, blog hidden inside). Keep only letters, digits and spaces.
+- `TavilySearchResults` (`langchain_community`) is deprecated; `TavilySearch` from
+  `langchain-tavily` returns a dict, read `["results"]`.
+- Images (repo stage 5, Gemini): every Gemini image model has free-tier quota **0**; it needs
+  billing. Left out for now.
