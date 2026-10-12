@@ -718,3 +718,43 @@ adapted to Groq + `langchain-tavily`). The `.md` files in the folder are blogs i
   `langchain-tavily` returns a dict, read `["results"]`.
 - Images (repo stage 5, Gemini): every Gemini image model has free-tier quota **0**; it needs
   billing. Left out for now.
+
+---
+
+## 13. How LangGraph Runs a Graph (theory)
+
+Theory only, no notebook.
+
+**The engine underneath: Pregel and super-steps**
+- `compile()` turns the `StateGraph` into a **Pregel** app. It runs in **super-steps**: in
+  each step every node that was triggered runs (in parallel), then all their updates are
+  applied to the state together, then the next set of nodes is picked.
+- That's why parallel nodes never see each other's writes in the same step: they all read
+  the state as it was at the start of the step.
+- A node is triggered when an edge points to it from a node that just ran. The run ends
+  when no node is triggered (everything reached `END`).
+
+**State keys are channels**
+- Every key in the state is a **channel**. A key without a reducer keeps the **last value**
+  written to it. With a reducer (`Annotated[list, operator.add]`) the writes are combined.
+- Two parallel nodes writing the same key **without** a reducer raise
+  `InvalidUpdateError`, because LangGraph can't know which value should win.
+- A node only returns the keys it changed (a **partial update**), never the whole state.
+
+**Input, output and private state**
+- `StateGraph(State, input_schema=Input, output_schema=Output)`: callers only pass the
+  input keys and only get the output keys back; everything else is internal.
+- A node can also read or write a **private** schema that isn't part of the main state,
+  handy for scratch values passed between two nodes.
+
+**Recursion limit**
+- Every super-step counts toward `recursion_limit` (default 25). A loop that never stops
+  raises `GraphRecursionError` instead of running forever.
+- Raise it per call: `graph.invoke(state, {'recursion_limit': 50})`.
+
+**Interview questions**
+- *What is a super-step?* One round where all triggered nodes run in parallel, then their
+  updates are applied together before the next round.
+- *Why do two parallel nodes writing one key fail?* No reducer means "last value wins", and
+  with two writers in one step there is no last one, so it raises `InvalidUpdateError`.
+- *What does the recursion limit count?* Super-steps, not nodes or LLM calls.
