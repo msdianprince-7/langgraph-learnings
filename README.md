@@ -758,3 +758,46 @@ Theory only, no notebook.
 - *Why do two parallel nodes writing one key fail?* No reducer means "last value wins", and
   with two writers in one step there is no last one, so it raises `InvalidUpdateError`.
 - *What does the recursion limit count?* Super-steps, not nodes or LLM calls.
+
+---
+
+## 14. Streaming (theory)
+
+Theory only, no notebook.
+
+**Why stream**
+- `invoke` waits for the whole graph and returns the final state. `stream` yields output
+  **while** the graph runs, so a UI can show progress and LLM tokens as they arrive.
+- `stream` and `astream` take the same input and config as `invoke`; only `stream_mode`
+  decides what comes out.
+
+**Stream modes**
+- `"values"`: the **full state** after every super-step.
+- `"updates"`: only **what each node returned**, as `{node_name: update}`. Smaller, and
+  shows which node did what.
+- `"messages"`: LLM output **token by token**, as `(message_chunk, metadata)`. The
+  metadata has `langgraph_node`, so you can show tokens from one node only.
+- `"custom"`: anything a node sends itself with `get_stream_writer()`, e.g.
+  `writer({'progress': '3/10 sections'})`.
+- `"debug"`: everything, for troubleshooting.
+- Pass a list to get several at once: `stream_mode=["updates", "messages"]` yields
+  `(mode, chunk)` pairs.
+
+**Streaming from subgraphs**
+- `stream(..., subgraphs=True)` also streams what happens **inside** subgraphs. Each chunk
+  then comes with a namespace saying which subgraph it came from.
+
+**Config and runtime values**
+- `config = {'configurable': {'thread_id': '1', 'model': 'gpt-oss-120b'}}`: anything in
+  `configurable` reaches every node, so one graph can switch model or user per call
+  without changing the state.
+- Things that describe the **call** (user ID, model choice) go in config; things that
+  change **during** the run go in the state.
+
+**Interview questions**
+- *`values` vs `updates`?* `values` sends the whole state each step, `updates` only the
+  keys each node changed.
+- *How do you stream LLM tokens out of a graph?* `stream_mode="messages"`, and filter by
+  `metadata['langgraph_node']` if only one node's tokens should be shown.
+- *What goes in config and what in state?* Per-call settings in config, data the graph
+  produces or changes in state.
