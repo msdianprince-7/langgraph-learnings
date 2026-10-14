@@ -801,3 +801,45 @@ Theory only, no notebook.
   `metadata['langgraph_node']` if only one node's tokens should be shown.
 - *What goes in config and what in state?* Per-call settings in config, data the graph
   produces or changes in state.
+
+---
+
+## 15. Time Travel and Durable Execution (theory)
+
+Theory only, no notebook.
+
+**A checkpoint per super-step**
+- With a checkpointer, LangGraph saves a **checkpoint** after every super-step: the state,
+  which nodes run next (`next`), and the config with a `checkpoint_id`.
+- `graph.get_state_history(config)` lists them newest first. Each one is a
+  `StateSnapshot` you can inspect or go back to.
+
+**Time travel: replay**
+- Invoke with a past checkpoint: `graph.invoke(None, {'configurable': {'thread_id': '1',
+  'checkpoint_id': '...'}})`. Passing `None` as input means "continue from here".
+- Steps **before** that checkpoint are not run again; steps after it run fresh. Useful to
+  see what would happen from an earlier point, or to debug one bad step.
+
+**Time travel: fork with `update_state`**
+- `graph.update_state(config, {'topic': 'new topic'})` writes a **new** checkpoint with the
+  changed values. The old history stays, so this is a fork, not an overwrite.
+- The update goes through the reducers like a node's return would. With `add_messages`
+  it appends, unless the message has the ID of an existing one (then it replaces it).
+- `as_node='writer'` makes the update count as if that node produced it, which decides
+  what runs next.
+
+**Durable execution**
+- Because every step is saved, a run that crashes (server restart, API error) can resume
+  from the last checkpoint with `invoke(None, config)` instead of starting over.
+- If one parallel node fails, the writes of the nodes that **succeeded** in that step are
+  kept as pending writes, so they are not run again on resume.
+- Side effects (sending an email, charging a card) should sit in their own node, or be safe
+  to repeat, because a resumed step runs that node again.
+
+**Interview questions**
+- *How do you resume a crashed run?* Same `thread_id`, invoke with `None` as input; it
+  continues from the last checkpoint.
+- *Replay vs fork?* Replay continues from an old checkpoint as is; fork changes the state
+  first with `update_state` and continues from the new branch.
+- *Why keep side effects in their own node?* A resumed step runs again, so anything not
+  safe to repeat should be isolated or made idempotent.
