@@ -843,3 +843,52 @@ Theory only, no notebook.
   first with `update_state` and continues from the new branch.
 - *Why keep side effects in their own node?* A resumed step runs again, so anything not
   safe to repeat should be isolated or made idempotent.
+
+---
+
+## 16. Multi-Agent Patterns (theory)
+
+Theory only, no notebook.
+
+**Why more than one agent**
+- One agent with 20 tools gets confused about which tool to pick, and its prompt gets
+  huge. Splitting into small agents, each with a few tools and one job, keeps every
+  prompt short and focused.
+
+**`Command`: update and route in one return**
+- A node can return `Command(update={'notes': ...}, goto='reviewer')` instead of a plain
+  dict: it changes the state **and** says where to go next, with no conditional edge.
+- Annotate the return type (`-> Command[Literal['reviewer', 'writer']]`) so LangGraph
+  knows the possible targets and can draw the graph.
+- Same `Command` (with `resume=...`) is what continues a graph after `interrupt()`.
+
+**Handoffs**
+- A handoff is one agent passing control to another. Usually a tool like
+  `transfer_to_researcher` that returns a `Command(goto='researcher', ...)`.
+- What travels with it is a choice: the full message history, or only a summary so the
+  next agent starts clean.
+
+**Three common shapes**
+- **Supervisor**: one boss agent decides which worker runs next, workers report back to
+  it. Easy to control and debug, but the supervisor is in every turn (extra LLM calls).
+- **Swarm / network**: agents hand off to each other directly, and the last active agent
+  answers the next message. Fewer calls, less control.
+- **Hierarchical**: supervisors of supervisors, each team being a subgraph.
+
+**`Send` vs `Command`**
+- `Send('worker', {...})` starts the **same** node many times with different input
+  (map-reduce, like the parallel section writers in the blog planner).
+- `Command(goto=...)` picks **which** node runs next. Fan-out vs routing.
+
+**Ready-made agent**
+- `create_react_agent` (now `create_agent` in LangChain 1.x) builds the
+  model -> tools -> model loop for you, and the result is a normal graph you can use as a
+  node inside a bigger multi-agent graph.
+
+**Interview questions**
+- *Supervisor vs swarm?* Supervisor routes every step through one agent (more control,
+  more calls); in a swarm agents hand off directly (fewer calls, less control).
+- *When `Command` and when a conditional edge?* `Command` when the node itself decides
+  and also updates state; a conditional edge when routing is a separate check on the state.
+- *`Send` vs `Command(goto=...)`?* `Send` runs one node many times in parallel with
+  different inputs; `goto` chooses the next node.
